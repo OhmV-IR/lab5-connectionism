@@ -102,10 +102,17 @@ public static class CommandLineBuild
     string directory = target == BuildTarget.WebGL ? outputPath : Path.GetDirectoryName(outputPath);
     if (!string.IsNullOrEmpty(directory))
     {
+      // Safety check: ensure the target directory is strictly a child of the actual Unity project root
+      if (!IsSafePathWithinProject(directory))
+      {
+        Debug.LogError("[CLI Build] Error: Output directory '" + directory + "' is outside the Unity project folder. Deletion blocked for safety.");
+        return false;
+      }
+
       // Start from an empty folder, so an old player can't be mistaken for this build's output
       if (Directory.Exists(directory))
       {
-        Directory.Delete(directory, true);
+        Directory.Delete(directory, true); 
       }
       Directory.CreateDirectory(directory);
     }
@@ -148,10 +155,6 @@ public static class CommandLineBuild
       Debug.LogError("[CLI Build] FAILED: " + target + " " + buildType + " build result " + report.summary.result + " with " + report.summary.totalErrors + " error(s).");
       return false;
 #else
-      // Unity 2017.x returns a string instead of a BuildReport: empty on success, otherwise
-      // an error message. It also returns "N errors" when a build finished but logged errors
-      // along the way (for example "RenderTexture.Create failed" under -nographics), so a
-      // build that wrote its player is still treated as a success.
       string error = BuildPipeline.BuildPlayer(options);
       if (string.IsNullOrEmpty(error))
       {
@@ -174,6 +177,34 @@ public static class CommandLineBuild
       {
         PlayerSettings.SetScriptingBackend(group, originalBackend);
       }
+    }
+  }
+
+  private static bool IsSafePathWithinProject(string targetDirectory)
+  {
+    try
+    {
+      // Application.dataPath gives .../ProjectFolder/Assets.
+      // Its parent is the guaranteed absolute path of the Unity project root.
+      string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+      string fullTarget = Path.GetFullPath(targetDirectory);
+
+      // Prevent targeting the project root folder itself
+      if (fullTarget.Equals(projectRoot, StringComparison.OrdinalIgnoreCase))
+      {
+        return false;
+      }
+
+      // Ensure proper trailing separators to prevent substring collisions 
+      // (e.g., C:/MyProject vs C:/MyProjectBackup)
+      string normalizedRoot = projectRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+      string normalizedTarget = fullTarget.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+
+      return normalizedTarget.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase);
+    }
+    catch (Exception)
+    {
+      return false;
     }
   }
 
@@ -202,8 +233,6 @@ public static class CommandLineBuild
     }
   }
 
-  // IL2CPP for Windows players only builds on a Windows machine. IL2CPP for Linux players
-  // only exists from Unity 2019.3, and builds on a Linux machine. WebGL is always IL2CPP.
   private static bool CanUseIl2Cpp(BuildTarget target)
   {
     switch (target)
@@ -239,7 +268,7 @@ public static class CommandLineBuild
       case BuildTarget.StandaloneLinux64:
         return Path.Combine(baseDir, productName + ".x86_64");
       case BuildTarget.WebGL:
-        return baseDir; // WebGL outputs a folder containing index.html and Build files
+        return baseDir;
       default:
         return Path.Combine(baseDir, productName);
     }
